@@ -139,6 +139,11 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
+                  {c.phone && (
+                    <span className="text-sm text-gray-600 font-medium">
+                      {c.phone}
+                    </span>
+                  )}
                   {c.assigned_to && (
                     <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">
                       {c.assigned_to}
