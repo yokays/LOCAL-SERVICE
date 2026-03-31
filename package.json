@@ -9,11 +9,12 @@
     "install-all": "npm install && cd client && npm install"
   },
   "dependencies": {
+    "@libsql/client": "^0.17.2",
+    "@vercel/blob": "^2.3.2",
     "better-sqlite3": "^11.7.0",
     "cors": "^2.8.5",
     "express": "^4.21.0",
-    "multer": "^1.4.5-lts.1",
-    "socket.io": "^4.8.0"
+    "multer": "^1.4.5-lts.1"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

@@ -1,14 +1,21 @@
-const Database = require('better-sqlite3');
-const path = require('path');
+const { createClient } = require('@libsql/client');
 const config = require('./config');
 
-const db = new Database(path.join(__dirname, 'lsa.db'));
+let db;
 
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+function getDb() {
+  if (!db) {
+    db = createClient({
+      url: process.env.TURSO_DATABASE_URL || 'file:./server/lsa.db',
+      authToken: process.env.TURSO_AUTH_TOKEN || undefined,
+    });
+  }
+  return db;
+}
 
-function init() {
-  db.exec(`
+async function init() {
+  const client = getDb();
+  await client.executeMultiple(`
     CREATE TABLE IF NOT EXISTS clients (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       first_name TEXT NOT NULL,
@@ -35,6 +42,7 @@ function init() {
       type TEXT NOT NULL DEFAULT 'autre',
       filename TEXT NOT NULL,
       original_name TEXT NOT NULL,
+      blob_url TEXT DEFAULT '',
       uploaded_by TEXT,
       uploaded_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
@@ -62,48 +70,55 @@ function init() {
     );
   `);
 
-  // Migrate existing tables — add new columns if missing
-  const cols = db.prepare("PRAGMA table_info(clients)").all().map(c => c.name);
-  if (!cols.includes('google_link')) {
-    db.exec("ALTER TABLE clients ADD COLUMN google_link TEXT DEFAULT ''");
-  }
-  if (!cols.includes('has_decennale')) {
-    db.exec("ALTER TABLE clients ADD COLUMN has_decennale INTEGER NOT NULL DEFAULT 0");
-  }
-  if (!cols.includes('has_kbis')) {
-    db.exec("ALTER TABLE clients ADD COLUMN has_kbis INTEGER NOT NULL DEFAULT 0");
-  }
-  if (!cols.includes('first_name')) {
-    db.exec("ALTER TABLE clients ADD COLUMN first_name TEXT DEFAULT ''");
-  }
-  if (!cols.includes('last_name')) {
-    db.exec("ALTER TABLE clients ADD COLUMN last_name TEXT DEFAULT ''");
-  }
-  if (!cols.includes('lsa_name')) {
-    db.exec("ALTER TABLE clients ADD COLUMN lsa_name TEXT DEFAULT ''");
-  }
-  // Migrate old 'name' field to first_name for existing rows
-  if (cols.includes('name') && cols.includes('first_name')) {
-    db.exec("UPDATE clients SET first_name = name WHERE first_name = '' AND name != ''");
+  // Migrations for existing tables
+  try {
+    const result = await client.execute("PRAGMA table_info(clients)");
+    const cols = result.rows.map(r => r.name);
+    if (!cols.includes('google_link')) {
+      await client.execute("ALTER TABLE clients ADD COLUMN google_link TEXT DEFAULT ''");
+    }
+    if (!cols.includes('has_decennale')) {
+      await client.execute("ALTER TABLE clients ADD COLUMN has_decennale INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!cols.includes('has_kbis')) {
+      await client.execute("ALTER TABLE clients ADD COLUMN has_kbis INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!cols.includes('first_name')) {
+      await client.execute("ALTER TABLE clients ADD COLUMN first_name TEXT DEFAULT ''");
+    }
+    if (!cols.includes('last_name')) {
+      await client.execute("ALTER TABLE clients ADD COLUMN last_name TEXT DEFAULT ''");
+    }
+    if (!cols.includes('lsa_name')) {
+      await client.execute("ALTER TABLE clients ADD COLUMN lsa_name TEXT DEFAULT ''");
+    }
+
+    // Documents blob_url migration
+    const docResult = await client.execute("PRAGMA table_info(documents)");
+    const docCols = docResult.rows.map(r => r.name);
+    if (!docCols.includes('blob_url')) {
+      await client.execute("ALTER TABLE documents ADD COLUMN blob_url TEXT DEFAULT ''");
+    }
+  } catch (e) {
+    // PRAGMA may not work on all Turso versions, ignore
   }
 }
 
-function createDefaultTasks(clientId) {
-  const stmt = db.prepare(
-    'INSERT INTO tasks (client_id, label, sort_order) VALUES (?, ?, ?)'
-  );
-  const transaction = db.transaction(() => {
-    config.DEFAULT_TASKS.forEach((label, i) => {
-      stmt.run(clientId, label, i);
-    });
+async function createDefaultTasks(clientId) {
+  const client = getDb();
+  const stmts = config.DEFAULT_TASKS.map((label, i) => ({
+    sql: 'INSERT INTO tasks (client_id, label, sort_order) VALUES (?, ?, ?)',
+    args: [clientId, label, i],
+  }));
+  await client.batch(stmts);
+}
+
+async function logActivity(clientId, action, detail, author) {
+  const client = getDb();
+  await client.execute({
+    sql: 'INSERT INTO activity_log (client_id, action, detail, author) VALUES (?, ?, ?, ?)',
+    args: [clientId, action, detail, author],
   });
-  transaction();
 }
 
-function logActivity(clientId, action, detail, author) {
-  db.prepare(
-    'INSERT INTO activity_log (client_id, action, detail, author) VALUES (?, ?, ?, ?)'
-  ).run(clientId, action, detail, author);
-}
-
-module.exports = { db, init, createDefaultTasks, logActivity };
+module.exports = { getDb, init, createDefaultTasks, logActivity };

@@ -18,7 +18,7 @@ const sectorLabels = {
 };
 
 export default function Dashboard() {
-  const { config, users, socket } = useApp();
+  const { config, users } = useApp();
   const [clients, setClients] = useState([]);
   const [stats, setStats] = useState({ total: 0, byStatus: {} });
   const [filters, setFilters] = useState({
@@ -42,16 +42,11 @@ export default function Dashboard() {
     load();
   }, [load]);
 
+  // Poll for updates every 10 seconds
   useEffect(() => {
-    if (!socket) return;
-    const handler = () => load();
-    socket.on('client:updated', handler);
-    socket.on('task:checked', handler);
-    return () => {
-      socket.off('client:updated', handler);
-      socket.off('task:checked', handler);
-    };
-  }, [socket, load]);
+    const interval = setInterval(load, 10000);
+    return () => clearInterval(interval);
+  }, [load]);
 
   const statCards = [
     { label: 'Total clients', value: stats.total, color: 'text-gray-900', bg: 'bg-white' },

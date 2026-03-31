@@ -10,7 +10,7 @@ import ActivityLog from '../components/ActivityLog';
 export default function ClientDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { currentUser, config, users, socket } = useApp();
+  const { currentUser, config, users } = useApp();
   const [client, setClient] = useState(null);
   const [editing, setEditing] = useState({});
   const [notes, setNotes] = useState('');
@@ -28,23 +28,11 @@ export default function ClientDetail() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Poll for updates every 10 seconds
   useEffect(() => {
-    if (!socket) return;
-    const handler = (data) => {
-      if (String(data.clientId) === id || String(data.client?.id) === id) load();
-    };
-    const taskHandler = (data) => {
-      if (String(data.clientId) === id) load();
-    };
-    socket.on('client:updated', handler);
-    socket.on('task:checked', taskHandler);
-    socket.on('document:uploaded', handler);
-    return () => {
-      socket.off('client:updated', handler);
-      socket.off('task:checked', taskHandler);
-      socket.off('document:uploaded', handler);
-    };
-  }, [socket, id, load]);
+    const interval = setInterval(load, 10000);
+    return () => clearInterval(interval);
+  }, [load]);
 
   async function updateField(field, value) {
     await api.updateClient(id, { [field]: value, user: currentUser });

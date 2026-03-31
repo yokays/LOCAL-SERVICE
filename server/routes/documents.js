@@ -1,26 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-const { db, logActivity } = require('../db');
+const { put, del } = require('@vercel/blob');
+const { getDb, logActivity } = require('../db');
 const config = require('../config');
 
-const storage = multer.diskStorage({
-  destination: (req, _file, cb) => {
-    const dir = path.join(config.UPLOAD_DIR, String(req.params.clientId));
-    fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
-  },
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    const name = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
-    cb(null, name);
-  },
-});
-
+// Use memory storage for Vercel (no local filesystem)
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: config.MAX_FILE_SIZE },
   fileFilter: (_req, file, cb) => {
     if (config.ALLOWED_MIMES.includes(file.mimetype)) {
@@ -32,79 +19,60 @@ const upload = multer({
 });
 
 // POST /api/documents/:clientId
-router.post('/:clientId', upload.array('files', 10), (req, res) => {
-  const clientId = req.params.clientId;
-  const client = db.prepare('SELECT * FROM clients WHERE id = ?').get(clientId);
-  if (!client) return res.status(404).json({ error: 'Client non trouvé' });
+router.post('/:clientId', upload.array('files', 10), async (req, res) => {
+  try {
+    const db = getDb();
+    const clientId = req.params.clientId;
+    const client = (await db.execute({ sql: 'SELECT * FROM clients WHERE id = ?', args: [clientId] })).rows[0];
+    if (!client) return res.status(404).json({ error: 'Client non trouvé' });
 
-  const docType = req.body.type || 'autre';
-  const user = req.body.user || 'Système';
+    const docType = req.body.type || 'autre';
+    const user = req.body.user || 'Système';
+    const docs = [];
 
-  const stmt = db.prepare(
-    'INSERT INTO documents (client_id, type, filename, original_name, uploaded_by) VALUES (?, ?, ?, ?, ?)'
-  );
-
-  const docs = [];
-  const transaction = db.transaction(() => {
     for (const file of req.files) {
-      const result = stmt.run(
-        clientId,
-        docType,
-        file.filename,
-        file.originalname,
-        user
-      );
-      docs.push(
-        db.prepare('SELECT * FROM documents WHERE id = ?').get(result.lastInsertRowid)
-      );
-      logActivity(clientId, 'doc_upload', `${file.originalname} (${docType})`, user);
+      // Upload to Vercel Blob
+      const blobName = `clients/${clientId}/${Date.now()}-${file.originalname}`;
+      const blob = await put(blobName, file.buffer, {
+        access: 'public',
+        contentType: file.mimetype,
+      });
+
+      const result = await db.execute({
+        sql: 'INSERT INTO documents (client_id, type, filename, original_name, blob_url, uploaded_by) VALUES (?, ?, ?, ?, ?, ?)',
+        args: [clientId, docType, blobName, file.originalname, blob.url, user],
+      });
+
+      const doc = (await db.execute({ sql: 'SELECT * FROM documents WHERE id = ?', args: [Number(result.lastInsertRowid)] })).rows[0];
+      docs.push(doc);
+      await logActivity(clientId, 'doc_upload', `${file.originalname} (${docType})`, user);
     }
-  });
-  transaction();
 
-  db.prepare("UPDATE clients SET updated_at = datetime('now') WHERE id = ?").run(
-    clientId
-  );
-
-  const io = req.app.get('io');
-  if (io) io.emit('document:uploaded', { clientId, documents: docs });
-
-  res.status(201).json(docs);
-});
-
-// GET /api/documents/:clientId/:filename
-router.get('/:clientId/:filename', (req, res) => {
-  const filePath = path.join(
-    config.UPLOAD_DIR,
-    req.params.clientId,
-    req.params.filename
-  );
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ error: 'Fichier non trouvé' });
+    await db.execute({ sql: "UPDATE clients SET updated_at = datetime('now') WHERE id = ?", args: [clientId] });
+    res.status(201).json(docs);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
-  res.sendFile(path.resolve(filePath));
 });
 
 // DELETE /api/documents/:id
-router.delete('/:id', (req, res) => {
-  const doc = db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
-  if (!doc) return res.status(404).json({ error: 'Document non trouvé' });
+router.delete('/:id', async (req, res) => {
+  try {
+    const db = getDb();
+    const doc = (await db.execute({ sql: 'SELECT * FROM documents WHERE id = ?', args: [req.params.id] })).rows[0];
+    if (!doc) return res.status(404).json({ error: 'Document non trouvé' });
 
-  const filePath = path.join(config.UPLOAD_DIR, String(doc.client_id), doc.filename);
-  if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    // Delete from Vercel Blob
+    if (doc.blob_url) {
+      try { await del(doc.blob_url); } catch (_) { /* ignore blob deletion errors */ }
+    }
 
-  db.prepare('DELETE FROM documents WHERE id = ?').run(req.params.id);
-  logActivity(
-    doc.client_id,
-    'doc_delete',
-    doc.original_name,
-    req.body.user || 'Système'
-  );
-
-  const io = req.app.get('io');
-  if (io) io.emit('document:uploaded', { clientId: doc.client_id, deleted: doc.id });
-
-  res.json({ success: true });
+    await db.execute({ sql: 'DELETE FROM documents WHERE id = ?', args: [req.params.id] });
+    await logActivity(doc.client_id, 'doc_delete', doc.original_name, req.body.user || 'Système');
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 module.exports = router;
