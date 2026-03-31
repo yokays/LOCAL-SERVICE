@@ -10,9 +10,7 @@ module.exports = {
   ],
   USERS: [
     { name: 'Noah', role: 'admin' },
-    { name: 'Dev1', role: 'dev' },
-    { name: 'Dev2', role: 'dev' },
-    { name: 'Commercial', role: 'commercial' },
+    { name: 'Aaron', role: 'admin' },
   ],
   SECTORS: [
     'toiture',

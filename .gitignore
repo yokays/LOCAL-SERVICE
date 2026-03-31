@@ -6,3 +6,4 @@ server/lsa.db-wal
 client/dist/
 .DS_Store
 *.log
+.vercel
