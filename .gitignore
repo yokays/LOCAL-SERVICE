@@ -1,0 +1,8 @@
+node_modules/
+server/uploads/
+server/lsa.db
+server/lsa.db-shm
+server/lsa.db-wal
+client/dist/
+.DS_Store
+*.log
